@@ -1,141 +1,155 @@
-const axios = require('axios');
 const { v4: uuidv4 } = require('uuid');
 const { query } = require('../database/db');
 
-// Mock Ethiopian Payment Gateway (Replace with actual API when available)
-class PaymentGateway {
+class EthiopianPaymentGateway {
     constructor() {
-        this.baseURL = process.env.PAYMENT_BASE_URL || 'https://api.mock-payment.et';
-        this.apiKey = process.env.PAYMENT_API_KEY;
-        this.secret = process.env.PAYMENT_SECRET;
+        this.providers = {
+            'telebirr': { name: 'TeleBirr', code: '*127#', shortCode: '*127*1*' },
+            'cbebirr': { name: 'CBE Birr', code: '*847#', shortCode: '*847*1*' },
+            'hellocash': { name: 'HelloCash', code: '*889#', shortCode: '*889*1*' },
+            'amole': { name: 'Amole', code: '*889#', shortCode: '*889*1*' }
+        };
     }
 
-    // Initialize payment
+    // Validate Ethiopian phone number
+    isValidEthiopianPhone(phone) {
+        return /^(?:\+251|0)(9\d{8})$/.test(phone);
+    }
+
+    // Generate Ethiopian-style transaction ID
+    generateTransactionId() {
+        const date = new Date();
+        const year = date.getFullYear().toString().slice(2);
+        const month = (date.getMonth() + 1).toString().padStart(2, '0');
+        return `ET${year}${month}${Math.floor(Math.random() * 10000).toString().padStart(4, '0')}`;
+    }
+
+    // Main payment initiation
     async initiatePayment(paymentData) {
         try {
-            const {
-                billId,
-                amount,
-                patientId,
-                patientName,
-                patientPhone,
-                description = 'Medical Bill Payment'
-            } = paymentData;
+            const { billId, amount, patientPhone, paymentMethod = 'mobile_money', provider = 'telebirr' } = paymentData;
 
-            // Generate unique transaction ID
-            const transactionId = `TXN-${Date.now()}-${uuidv4().slice(0, 8)}`;
-            
-            // In Ethiopia, common payment methods include:
-            // 1. Telebirr (Ethio Telecom)
-            // 2. CBE Birr (Commercial Bank of Ethiopia)
-            // 3. HelloCash
-            // 4. M-Birr
-            // 5. Amole
-            // 6. Bank Transfer
-            // 7. Cash
-            
-            // For now, we'll simulate a successful response
-            const mockResponse = {
-                success: true,
-                transactionId,
-                paymentUrl: `${this.baseURL}/pay/${transactionId}`,
-                qrCode: `data:image/png;base64,mock_qr_code_base64_here`,
-                message: 'Payment initialized successfully. Please complete payment using the provided methods.',
-                timestamp: new Date().toISOString()
-            };
-
-            // Save transaction to database
-            await query(
-                `INSERT INTO payments (bill_id, transaction_id, amount, status, payment_method) 
-                 VALUES ($1, $2, $3, $4, $5)`,
-                [billId, transactionId, amount, 'pending', 'mobile_money']
-            );
-
-            return mockResponse;
-
-        } catch (error) {
-            console.error('Payment initiation error:', error);
-            throw new Error('Failed to initiate payment');
-        }
-    }
-
-    // Verify payment status
-    async verifyPayment(transactionId) {
-        try {
-            // In real implementation, this would call the payment gateway API
-            // For now, return mock verification
-            const mockStatus = Math.random() > 0.3 ? 'completed' : 'pending';
-            
-            if (mockStatus === 'completed') {
-                // Update payment and bill status in database
-                await query(
-                    `UPDATE payments SET status = 'completed', updated_at = CURRENT_TIMESTAMP 
-                     WHERE transaction_id = $1 RETURNING bill_id`,
-                    [transactionId]
-                );
-
-                const result = await query(
-                    `UPDATE bills SET payment_status = 'paid', paid_date = CURRENT_TIMESTAMP 
-                     WHERE id = (SELECT bill_id FROM payments WHERE transaction_id = $1)`,
-                    [transactionId]
-                );
-
-                return {
-                    success: true,
-                    status: 'completed',
-                    message: 'Payment verified successfully',
-                    transactionId
-                };
+            // Validate phone
+            if (!this.isValidEthiopianPhone(patientPhone)) {
+                throw new Error('Invalid Ethiopian phone number. Use format: +2519XXXXXXXX or 09XXXXXXXX');
             }
+
+            const transactionId = this.generateTransactionId();
+            const selectedProvider = this.providers[provider] || this.providers.telebirr;
+            
+            // Generate USSD string
+            const ussdString = this.generateUSSDString(selectedProvider.shortCode, amount, patientPhone);
+            
+            // Save to database
+            await query(
+                `INSERT INTO payments (bill_id, transaction_id, amount, payment_method, payment_gateway, status)
+                 VALUES ($1, $2, $3, $4, $5, 'pending')`,
+                [billId, transactionId, amount, paymentMethod, selectedProvider.name]
+            );
 
             return {
                 success: true,
-                status: 'pending',
-                message: 'Payment still pending',
-                transactionId
+                transactionId,
+                messageAmharic: `የ${selectedProvider.name} በመጠቀም ክፍያ ያድርጉ`,
+                messageEnglish: `Please complete payment using ${selectedProvider.name}`,
+                provider: selectedProvider.name,
+                amount: amount + ' ETB',
+                ussdString,
+                paymentMethod,
+                validUntil: new Date(Date.now() + 30 * 60 * 1000), // 30 minutes
+                checkStatusUrl: `/api/payments/verify/${transactionId}`
             };
 
         } catch (error) {
-            console.error('Payment verification error:', error);
-            throw new Error('Failed to verify payment');
+            console.error('Payment error:', error);
+            throw error;
         }
     }
 
-    // Process mobile money payment (common in Ethiopia)
-    async processMobileMoney(paymentData) {
-        const { phone, amount, provider = 'telebirr' } = paymentData;
-        
-        // Simulate different Ethiopian mobile money providers
-        const providers = {
-            'telebirr': { name: 'TeleBirr', code: '*127#' },
-            'cbebirr': { name: 'CBE Birr', code: '*847#' },
-            'hellocash': { name: 'HelloCash', code: '*889#' },
-            'mbirr': { name: 'M-Birr', code: '*212#' }
-        };
-
-        const providerInfo = providers[provider] || providers.telebirr;
-        
-        return {
-            success: true,
-            message: `Please dial ${providerInfo.code} on your phone to complete payment of ${amount} ETB`,
-            provider: providerInfo.name,
-            amount,
-            phone,
-            transactionId: `MM-${Date.now()}`
-        };
+    // Generate USSD string
+    generateUSSDString(shortCode, amount, phone) {
+        const cleanPhone = phone.replace('+251', '0').replace(/\D/g, '');
+        return `${shortCode}${Math.round(amount)}*${cleanPhone}#`;
     }
 
-    // Generate invoice PDF (simplified)
+    // Verify payment with better simulation
+    async verifyPayment(transactionId) {
+        try {
+            // Get payment from DB
+            const payment = await query(
+                'SELECT * FROM payments WHERE transaction_id = $1',
+                [transactionId]
+            );
+
+            if (payment.rows.length === 0) {
+                throw new Error('Transaction not found');
+            }
+
+            const currentPayment = payment.rows[0];
+            let newStatus = currentPayment.status;
+
+            // Simulate status change (80% success rate for pending payments)
+            if (currentPayment.status === 'pending') {
+                const random = Math.random();
+                newStatus = random < 0.8 ? 'completed' : 
+                           random < 0.9 ? 'pending' : 'failed';
+                
+                // Update status if changed
+                if (newStatus !== currentPayment.status) {
+                    await query(
+                        'UPDATE payments SET status = $1, updated_at = CURRENT_TIMESTAMP WHERE transaction_id = $2',
+                        [newStatus, transactionId]
+                    );
+
+                    // Update bill if completed
+                    if (newStatus === 'completed') {
+                        await query(
+                            `UPDATE bills SET payment_status = 'paid', paid_date = CURRENT_TIMESTAMP 
+                             WHERE id = $1`,
+                            [currentPayment.bill_id]
+                        );
+                    }
+                }
+            }
+
+            // Status in Amharic
+            const statusAmharic = {
+                'pending': 'በጥበቃ ላይ',
+                'completed': 'ተጠናቅቋል',
+                'failed': 'አልተሳካም'
+            }[newStatus] || newStatus;
+
+            return {
+                success: true,
+                transactionId,
+                status: newStatus,
+                statusAmharic,
+                amount: currentPayment.amount,
+                currency: 'ETB',
+                timestamp: new Date().toISOString()
+            };
+
+        } catch (error) {
+            console.error('Verification error:', error);
+            throw error;
+        }
+    }
+
+    // Enhanced invoice generation
     async generateInvoice(billId) {
         try {
-            const billResult = await query(
-                `SELECT b.*, p.full_name, p.phone, p.address,
-                        (SELECT json_agg(bi) FROM bill_items bi WHERE bi.bill_id = b.id) as items
-                 FROM bills b
-                 JOIN patients p ON b.patient_id = p.id
-                 WHERE b.id = $1`,
-                [billId]
-            );
+            const billResult = await query(`
+                SELECT b.*, p.full_name, p.phone, p.address,
+                       (SELECT json_agg(json_build_object(
+                           'service', bi.service_name,
+                           'quantity', bi.quantity,
+                           'unitPrice', bi.unit_price,
+                           'subtotal', bi.subtotal
+                       )) FROM bill_items bi WHERE bi.bill_id = b.id) as items
+                FROM bills b
+                JOIN patients p ON b.patient_id = p.id
+                WHERE b.id = $1
+            `, [billId]);
 
             if (billResult.rows.length === 0) {
                 throw new Error('Bill not found');
@@ -143,31 +157,57 @@ class PaymentGateway {
 
             const bill = billResult.rows[0];
             
-            // Simple invoice object (in real app, generate PDF)
-            const invoice = {
+            // Ethiopian-style invoice
+            return {
+                hospital: {
+                    name: 'Healthcare Management System',
+                    address: 'Addis Ababa, Ethiopia',
+                    phone: '+251 11 123 4567'
+                },
                 invoiceNumber: bill.bill_number,
-                date: bill.created_at,
+                date: new Date(bill.created_at).toLocaleDateString('en-ET'),
                 patient: {
                     name: bill.full_name,
                     phone: bill.phone,
                     address: bill.address
                 },
                 items: bill.items || [],
-                subtotal: bill.amount,
-                tax: bill.tax_amount,
-                discount: bill.discount,
-                total: bill.total_amount,
+                subtotal: parseFloat(bill.amount),
+                tax: parseFloat(bill.tax_amount || 0),
+                discount: parseFloat(bill.discount || 0),
+                total: parseFloat(bill.total_amount),
                 paymentStatus: bill.payment_status,
-                dueDate: bill.due_date
+                currency: 'ETB',
+                currencySymbol: 'Br'
             };
 
-            return invoice;
-
         } catch (error) {
-            console.error('Invoice generation error:', error);
-            throw new Error('Failed to generate invoice');
+            console.error('Invoice error:', error);
+            throw error;
         }
+    }
+
+    // Process mobile money (simpler version)
+    async processMobileMoney(paymentData) {
+        const { phone, amount, provider = 'telebirr' } = paymentData;
+        
+        if (!this.isValidEthiopianPhone(phone)) {
+            throw new Error('Invalid Ethiopian phone number');
+        }
+
+        const selectedProvider = this.providers[provider] || this.providers.telebirr;
+        const ussdString = this.generateUSSDString(selectedProvider.shortCode, amount, phone);
+
+        return {
+            success: true,
+            message: `Dial ${ussdString} to pay ${amount} ETB`,
+            provider: selectedProvider.name,
+            amount: amount + ' ETB',
+            phone,
+            ussdString,
+            transactionId: this.generateTransactionId()
+        };
     }
 }
 
-module.exports = new PaymentGateway();
+module.exports = new EthiopianPaymentGateway();

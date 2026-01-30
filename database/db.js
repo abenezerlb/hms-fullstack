@@ -1,5 +1,13 @@
 const { Pool } = require('pg');
-require('dotenv').config();
+const path = require('path');
+
+// Load .env from project root
+require('dotenv').config({ path: path.resolve(__dirname, '..', '.env') });
+
+// Debug: Check if env vars are loaded
+if (!process.env.DB_PASSWORD) {
+    console.warn('⚠️  DB_PASSWORD not found in environment variables');
+}
 
 const pool = new Pool({
     host: process.env.DB_HOST,
