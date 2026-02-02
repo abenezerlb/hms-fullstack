@@ -79,3 +79,6 @@ logs/
 tmp/
 temp/
 >>>>>>> 285c9f6168106e40e4b0ff36d20f1fcc1cd824af
+
+# Backend temporary database configuration
+backend/db.js
