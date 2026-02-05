@@ -145,6 +145,15 @@ CREATE TABLE IF NOT EXISTS audit_logs (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+--10. Sessions Table
+CREATE TABLE IF NOT EXISTS sessions (
+    id VARCHAR(255) PRIMARY KEY,
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    expires_at BIGINT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
 -- Create indexes for better performance
 CREATE INDEX idx_users_email ON users(email);
 CREATE INDEX idx_users_role ON users(role);
@@ -156,6 +165,8 @@ CREATE INDEX idx_medical_records_patient_id ON medical_records(patient_id);
 CREATE INDEX idx_bills_patient_id ON bills(patient_id);
 CREATE INDEX idx_bills_payment_status ON bills(payment_status);
 CREATE INDEX idx_payments_bill_id ON payments(bill_id);
+CREATE INDEX idx_sessions_user_id ON sessions(user_id);
+CREATE INDEX idx_sessions_expires_at ON sessions(expires_at);
 
 -- Create function for updating updated_at timestamp
 CREATE OR REPLACE FUNCTION update_updated_at_column()
@@ -185,6 +196,9 @@ CREATE TRIGGER update_bills_updated_at BEFORE UPDATE ON bills
 CREATE TRIGGER update_payments_updated_at BEFORE UPDATE ON payments
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
+CREATE TRIGGER update_sessions_updated_at BEFORE UPDATE ON sessions
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+    
 -- Insert initial data
 INSERT INTO users (id, name, email, password, role, specialization, phone) VALUES
     ('11111111-1111-1111-1111-111111111111', 'Admin User', 'admin@hms.et', '$2b$10$YourHashedPasswordHere', 'admin', 'Administration', '+251911111111'),
