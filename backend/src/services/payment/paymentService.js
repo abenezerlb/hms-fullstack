@@ -1,5 +1,5 @@
 const { v4: uuidv4 } = require('uuid');
-const { query } = require('../database/db');
+const { query } = require('../../databaseandpayment/database/db');
 
 class EthiopianPaymentGateway {
     constructor() {
