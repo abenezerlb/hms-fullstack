@@ -1,257 +1,129 @@
 /**
- * Database Connection Manager for HMS
- * Centralized connection handling with proper error management
+ * Database Connection Module
+ * 
+ * This module establishes and manages the PostgreSQL database connection
+ * using the 'pg' library (node-postgres). It provides:
+ * 1. A connection pool for efficient database operations
+ * 2. Connection health checks
+ * 3. Graceful shutdown handling
+ * 
+ * Why use connection pooling?
+ * - Reuses connections instead of creating new ones for each query
+ * - Improves performance by reducing connection overhead
+ * - Manages maximum concurrent connections
  */
 
 const { Pool } = require('pg');
-const logger = require('../utils/logger'); // You'll need to create this
+const logger = require('../utils/logger');
 
-class DatabaseConnection {
-    constructor() {
-        this.pool = null;
-        this.isConnected = false;
-        this.retryCount = 0;
-        this.maxRetries = 3;
-    }
+// Load environment variables
+const {
+  DB_HOST,
+  DB_PORT,
+  DB_USER,
+  DB_PASSWORD,
+  DB_NAME,
+  NODE_ENV
+} = process.env;
 
-    /**
-     * Initialize database connection pool
-     */
-    async initialize() {
-        try {
-            // Validate environment variables
-            this.validateEnvVars();
+/**
+ * Database configuration object
+ * Different configurations for development, test, and production environments
+ */
+const dbConfig = {
+  host: DB_HOST || 'localhost',
+  port: parseInt(DB_PORT) || 5432,
+  user: DB_USER || 'hms_user',
+  password: DB_PASSWORD || 'hms_password',
+  database: DB_NAME || 'hms_db',
+  // Connection pool settings
+  max: 20, // maximum number of clients in the pool
+  idleTimeoutMillis: 30000, // how long a client is allowed to remain idle
+  connectionTimeoutMillis: 2000, // how long to wait for a connection
+  // SSL configuration (important for production)
+  ssl: NODE_ENV === 'production' ? { rejectUnauthorized: false } : false
+};
 
-            this.pool = new Pool({
-                host: process.env.DB_HOST || 'localhost',
-                port: parseInt(process.env.DB_PORT) || 5432,
-                database: process.env.DB_NAME || 'hms_db',
-                user: process.env.DB_USER || 'postgres',
-                password: process.env.DB_PASSWORD,
-                
-                // Connection pool settings
-                max: parseInt(process.env.DB_POOL_MAX) || 20,
-                min: parseInt(process.env.DB_POOL_MIN) || 2,
-                idleTimeoutMillis: 30000,
-                connectionTimeoutMillis: 2000,
-                
-                // SSL for production (important for compliance!)
-                ssl: process.env.NODE_ENV === 'production' 
-                    ? { rejectUnauthorized: false } 
-                    : false
-            });
+// Create a connection pool
+const pool = new Pool(dbConfig);
 
-            // Test connection
-            const client = await this.pool.connect();
-            const result = await client.query('SELECT NOW()');
-            client.release();
-            
-            this.isConnected = true;
-            logger.info(`✅ Database connected successfully: ${process.env.DB_NAME}`);
-            logger.info(`📊 Database time: ${result.rows[0].now}`);
-            
-            // Setup pool error handling
-            this.setupPoolEventHandlers();
-            
-            return this.pool;
-            
-        } catch (error) {
-            this.handleConnectionError(error);
-            throw error;
-        }
-    }
+/**
+ * Event listener for when a client connects to the pool
+ * Useful for debugging and monitoring
+ */
+pool.on('connect', () => {
+  logger.info('Database connection established');
+});
 
-    /**
-     * Validate required environment variables
-     */
-    validateEnvVars() {
-        const required = ['DB_NAME', 'DB_USER', 'DB_PASSWORD'];
-        const missing = [];
-        
-        required.forEach(varName => {
-            if (!process.env[varName] || process.env[varName].trim() === '') {
-                missing.push(varName);
-            }
-        });
-        
-        if (missing.length > 0) {
-            throw new Error(`Missing database environment variables: ${missing.join(', ')}`);
-        }
-    }
+/**
+ * Event listener for pool errors
+ * Handles connection errors gracefully
+ */
+pool.on('error', (err) => {
+  logger.error('Unexpected database pool error:', err);
+  // In production, you might want to implement reconnection logic here
+});
 
-    /**
-     * Setup event handlers for connection pool
-     */
-    setupPoolEventHandlers() {
-        this.pool.on('error', (err) => {
-            logger.error('⚠️ Unexpected database pool error:', err);
-            this.isConnected = false;
-            
-            // Attempt reconnect after delay
-            setTimeout(() => this.reconnect(), 5000);
-        });
+/**
+ * Test database connection
+ * This function is used during application startup to verify database connectivity
+ * @returns {Promise<boolean>} True if connection successful, false otherwise
+ */
+const testConnection = async () => {
+  try {
+    // Try to get a client from the pool and run a simple query
+    const client = await pool.connect();
+    const result = await client.query('SELECT NOW() as current_time');
+    client.release(); // Always release the client back to the pool
+    
+    logger.info('Database connection test successful:', result.rows[0].current_time);
+    return true;
+  } catch (error) {
+    logger.error('Database connection test failed:', error.message);
+    return false;
+  }
+};
 
-        this.pool.on('connect', () => {
-            logger.debug('📡 New database connection established');
-        });
+/**
+ * Get a client from the pool for transaction handling
+ * Important for operations that require multiple queries in a transaction
+ * @returns {Promise<import('pg').PoolClient>} Database client
+ */
+const getClient = async () => {
+  return await pool.connect();
+};
 
-        this.pool.on('remove', () => {
-            logger.debug('🔌 Database connection removed from pool');
-        });
-    }
+/**
+ * Execute a query with parameters
+ * This is the main function used throughout the application for database operations
+ * @param {string} text - SQL query text
+ * @param {Array} params - Query parameters (prevents SQL injection)
+ * @returns {Promise<import('pg').QueryResult>} Query result
+ */
+const query = (text, params) => {
+  // Log queries in development for debugging (not in production for performance)
+  if (NODE_ENV === 'development') {
+    logger.debug(`Executing query: ${text}`, { params });
+  }
+  
+  return pool.query(text, params);
+};
 
-    /**
-     * Attempt to reconnect to database
-     */
-    async reconnect() {
-        if (this.retryCount >= this.maxRetries) {
-            logger.error('❌ Maximum reconnection attempts reached');
-            return;
-        }
-        
-        this.retryCount++;
-        logger.warn(`🔄 Attempting database reconnection (${this.retryCount}/${this.maxRetries})`);
-        
-        try {
-            await this.initialize();
-            this.retryCount = 0; // Reset on success
-        } catch (error) {
-            logger.error(`Reconnection attempt ${this.retryCount} failed:`, error.message);
-            
-            // Exponential backoff
-            const delay = Math.min(1000 * Math.pow(2, this.retryCount), 30000);
-            setTimeout(() => this.reconnect(), delay);
-        }
-    }
+/**
+ * Gracefully shutdown the database pool
+ * Should be called when the application is shutting down
+ */
+const shutdown = async () => {
+  logger.info('Shutting down database pool...');
+  await pool.end();
+  logger.info('Database pool has been shut down');
+};
 
-    /**
-     * Handle connection errors
-     */
-    handleConnectionError(error) {
-        logger.error('❌ Database connection failed:', {
-            message: error.message,
-            code: error.code,
-            detail: error.detail
-        });
-        
-        this.isConnected = false;
-        
-        // Provide helpful troubleshooting tips
-        if (error.code === '28P01') {
-            logger.error('💡 Tip: Check DB_USER and DB_PASSWORD credentials');
-        } else if (error.code === '3D000') {
-            logger.error(`💡 Tip: Database '${process.env.DB_NAME}' might not exist. Create it first.`);
-        } else if (error.code === 'ECONNREFUSED') {
-            logger.error('💡 Tip: PostgreSQL might not be running or is on a different port');
-        }
-    }
-
-    /**
-     * Execute a query with parameters
-     * @param {string} text - SQL query
-     * @param {Array} params - Query parameters
-     * @returns {Promise} Query result
-     */
-    async query(text, params = []) {
-        if (!this.isConnected) {
-            throw new Error('Database not connected');
-        }
-        
-        const start = Date.now();
-        
-        try {
-            const result = await this.pool.query(text, params);
-            const duration = Date.now() - start;
-            
-            // Log slow queries (for performance monitoring)
-            if (duration > 1000) {
-                logger.warn(`🐌 Slow query detected (${duration}ms): ${text}`);
-            }
-            
-            return result;
-        } catch (error) {
-            logger.error('Query error:', {
-                query: text,
-                params: params,
-                error: error.message
-            });
-            throw error;
-        }
-    }
-
-    /**
-     * Execute a transaction
-     * @param {Function} callback - Async function receiving client
-     */
-    async transaction(callback) {
-        const client = await this.pool.connect();
-        
-        try {
-            await client.query('BEGIN');
-            const result = await callback(client);
-            await client.query('COMMIT');
-            return result;
-        } catch (error) {
-            await client.query('ROLLBACK');
-            logger.error('Transaction failed:', error);
-            throw error;
-        } finally {
-            client.release();
-        }
-    }
-
-    /**
-     * Get raw pool (for advanced use cases)
-     */
-    getPool() {
-        return this.pool;
-    }
-
-    /**
-     * Check database health
-     */
-    async checkHealth() {
-        try {
-            const result = await this.query('SELECT 1 as health_check');
-            return {
-                status: 'healthy',
-                timestamp: new Date().toISOString(),
-                details: {
-                    totalCount: this.pool.totalCount,
-                    idleCount: this.pool.idleCount,
-                    waitingCount: this.pool.waitingCount
-                }
-            };
-        } catch (error) {
-            return {
-                status: 'unhealthy',
-                timestamp: new Date().toISOString(),
-                error: error.message
-            };
-        }
-    }
-
-    /**
-     * Gracefully shutdown database connections
-     */
-    async shutdown() {
-        if (this.pool) {
-            logger.info('🔌 Shutting down database connections...');
-            await this.pool.end();
-            this.isConnected = false;
-            logger.info('✅ Database connections closed');
-        }
-    }
-}
-
-// Create singleton instance
-const database = new DatabaseConnection();
-
-// Initialize on module load (or defer to app startup)
-if (process.env.DB_AUTO_INIT !== 'false') {
-    database.initialize().catch(err => {
-        logger.error('Failed to auto-initialize database:', err);
-    });
-}
-
-module.exports = database;
+// Export the database functions and pool
+module.exports = {
+  pool,
+  query,
+  getClient,
+  testConnection,
+  shutdown
+};

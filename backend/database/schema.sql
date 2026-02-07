@@ -1,3 +1,11 @@
+/*
+Healthcare Management System - Database Schema
+Version: 1.0.0
+Author: HMS Team
+Description: PostgreSQL schema for HMS with audit trails, constraints, and indexes
+*/
+
+
 -- Enable UUID extension if needed
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
