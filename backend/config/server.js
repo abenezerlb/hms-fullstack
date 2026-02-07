@@ -3,8 +3,8 @@ import bcrypt from "bcrypt";
 import cookieParser from "cookie-parser";
 import cors from "cors";
 import jwt from "jsonwebtoken";
-import { queryDatabase } from "./lib.js";
-import { generateSessionId } from "./lib.js";
+import { queryDatabase } from "../lib.js";
+import { generateSessionId } from "../lib.js";
 
 const app = express();
 

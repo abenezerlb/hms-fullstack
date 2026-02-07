@@ -13,7 +13,7 @@ const routes = require('./routes');
 
 // Import middleware
 const { cors, securityHeaders, requestId, responseTime, httpLogger, rateLimiter } = require('./middleware/logger');
-const { errorHandler, notFound } = require('./middleware/error-handler');
+const { errorHandler, notFound } = require('./middleware/errorHandler');
 
 // Initialize Express app
 const app = express();
