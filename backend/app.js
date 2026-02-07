@@ -1,48 +1,87 @@
 const express = require('express');
-const cors = require('cors');
-require('dotenv').config();
+const dotenv = require('dotenv');
+const path = require('path');
 
+// Load environment variables
+dotenv.config({ path: path.join(__dirname, '.env') });
+
+// Import database connection
+const dbManager = require('./database/connection');
+
+// Import routes
+const routes = require('./routes');
+
+// Import middleware
+const { cors, securityHeaders, requestId, responseTime, httpLogger, rateLimiter } = require('./middleware/logger');
+const { errorHandler, notFound } = require('./middleware/error-handler');
+
+// Initialize Express app
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Middleware
-app.use(cors());
-app.use(express.json());
+// Global middleware (applied to all routes)
+app.use(cors);
+app.use(securityHeaders);
+app.use(requestId);
+app.use(responseTime);
+app.use(httpLogger);
+app.use(rateLimiter(100)); // 100 requests per 15 minutes
+
+// Body parsing middleware
+app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
 
-// Import routes
-const paymentRoutes = require('./routes/paymentRoutes');
+// Static files (if needed)
+app.use('/public', express.static(path.join(__dirname, 'public')));
 
-// Routes
-app.use('/api/payments', paymentRoutes);
+// API Routes
+app.use('/', routes);
 
-// Health check
-app.get('/health', (req, res) => {
-    res.json({ 
-        status: 'ok', 
-        timestamp: new Date().toISOString(),
-        service: 'Healthcare Management System API'
-    });
-});
+// 404 handler
+app.use('*', notFound);
 
-// Database test endpoint
-app.get('/api/test-db', async (req, res) => {
+// Global error handler
+app.use(errorHandler);
+
+// Database connection and server startup
+async function startServer() {
     try {
-        const { query } = require('./database/db');
-        const result = await query('SELECT NOW() as current_time');
-        res.json({ 
-            success: true, 
-            message: 'Database connected successfully',
-            time: result.rows[0].current_time
+        // Initialize database connection
+        await dbManager.initialize();
+        console.log('✅ Database connected successfully');
+        
+        // Start server
+        app.listen(PORT, () => {
+            console.log(`🚀 Server running on port ${PORT}`);
+            console.log(`📚 API Documentation: http://localhost:${PORT}/api/docs`);
+            console.log(`🏥 Health Check: http://localhost:${PORT}/api/health`);
+            console.log(`🔐 Login Endpoint: http://localhost:${PORT}/api/auth/login`);
+            console.log(`\n📋 Available Roles:`);
+            console.log(`   - Admin: admin@hms.et / temporary_password`);
+            console.log(`   - Doctor: alex@hms.et / temporary_password`);
+            console.log(`   - Receptionist: reception@hms.et / temporary_password`);
         });
+        
+        // Graceful shutdown
+        process.on('SIGTERM', async () => {
+            console.log('SIGTERM received. Shutting down gracefully...');
+            await dbManager.shutdown();
+            process.exit(0);
+        });
+        
+        process.on('SIGINT', async () => {
+            console.log('SIGINT received. Shutting down gracefully...');
+            await dbManager.shutdown();
+            process.exit(0);
+        });
+        
     } catch (error) {
-        res.status(500).json({ error: 'Database connection failed', details: error.message });
+        console.error('❌ Failed to start server:', error);
+        process.exit(1);
     }
-});
+}
 
-// Start server
-app.listen(PORT, () => {
-    console.log(`HMS Server running on port ${PORT}`);
-    console.log(`Environment: ${process.env.NODE_ENV}`);
-    console.log(`Database: ${process.env.DB_NAME}@${process.env.DB_HOST}`);
-});
+// Start the server
+startServer();
+
+module.exports = app; // For testing

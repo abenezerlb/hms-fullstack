@@ -1,12 +1,12 @@
 {
-  "name": "hms-project",
+  "name": "hms-backend",
   "version": "1.0.0",
-  "description": "Healthcare Management System",
+  "description": "Healthcare Management System Backend API",
   "main": "app.js",
   "scripts": {
     "start": "node app.js",
     "dev": "nodemon app.js",
-    "db:setup": "node database/scripts/setupDatabase.js",
+    "db:setup": "node database/setup.js",
     "db:reset": "node database/scripts/resetDatabase.js",
      "db:migrate": "node database/scripts/runMigrations.js",
     "db:seed": "node database/scripts/seedDatabase.js",
@@ -32,6 +32,9 @@
   },
   "devDependencies": {
     "msw": "^2.12.7",
-    "nodemon": "^2.0.22"
+    "nodemon": "^2.0.22",
+    "jest": "^29.7.0",
+    "supertest": "^6.3.3",
+    "eslint": "^8.53.0"
   }
 }
