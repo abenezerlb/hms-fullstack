@@ -1,202 +1,197 @@
 /**
- * Database Setup Script
- * 
- * This script initializes the HMS database by:
- * 1. Creating the database if it doesn't exist
- * 2. Running all migration files in order
- * 3. Seeding initial data
- * 
- * Usage: node scripts/setupDatabase.js
- * 
- * Important: This script should be run once during initial setup
- * and whenever the database schema changes.
+ * Simple Database Setup Script
+ * For beginners or when the main setup script fails
  */
 
+const { Client } = require('pg');
 const fs = require('fs').promises;
 const path = require('path');
-const { exec } = require('child_process');
-const util = require('util');
 const logger = require('../utils/logger');
 
-// Convert exec to promise-based for easier async/await usage
-const execAsync = util.promisify(exec);
-
 // Load environment variables
-require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
+require('dotenv').config();
 
 const {
-  DB_HOST,
-  DB_PORT,
-  DB_USER,
-  DB_PASSWORD,
-  DB_NAME,
-  NODE_ENV
+  DB_HOST = 'localhost',
+  DB_PORT = 5432,
+  DB_USER = 'postgres',
+  DB_PASSWORD = 'postgres',
+  DB_NAME = 'hms'
 } = process.env;
 
 /**
- * Create database if it doesn't exist
- * PostgreSQL doesn't have CREATE DATABASE IF NOT EXISTS, so we need to check first
+ * Create a simple schema directly
  */
-async function createDatabaseIfNotExists() {
-  const checkDbCommand = `PGPASSWORD="${DB_PASSWORD}" psql -h ${DB_HOST} -p ${DB_PORT} -U ${DB_USER} -d postgres -t -c "SELECT 1 FROM pg_database WHERE datname='${DB_NAME}'"`;
+const simpleSchema = `
+-- Enable UUID extension
+CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+
+-- Users table
+CREATE TABLE IF NOT EXISTS users (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    name VARCHAR(100) NOT NULL,
+    email VARCHAR(100) UNIQUE NOT NULL,
+    password VARCHAR(255) NOT NULL,
+    role VARCHAR(50) NOT NULL CHECK (role IN ('admin', 'doctor', 'receptionist', 'lab_technician')),
+    specialization VARCHAR(100),
+    phone VARCHAR(20),
+    department VARCHAR(100),
+    is_active BOOLEAN DEFAULT TRUE,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Patients table
+CREATE TABLE IF NOT EXISTS patients (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    full_name VARCHAR(200) NOT NULL,
+    gender VARCHAR(10) CHECK (gender IN ('male', 'female', 'other')),
+    date_of_birth DATE NOT NULL,
+    phone VARCHAR(20) UNIQUE NOT NULL,
+    email VARCHAR(100),
+    address TEXT,
+    emergency_contact VARCHAR(20),
+    blood_type VARCHAR(5),
+    allergies TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Appointments table
+CREATE TABLE IF NOT EXISTS appointments (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    patient_id UUID NOT NULL REFERENCES patients(id) ON DELETE CASCADE,
+    doctor_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    appointment_date TIMESTAMP NOT NULL,
+    appointment_type VARCHAR(50) DEFAULT 'consultation',
+    status VARCHAR(20) DEFAULT 'scheduled' 
+        CHECK (status IN ('scheduled', 'confirmed', 'checked-in', 'in-progress', 'completed', 'cancelled', 'no-show')),
+    reason TEXT,
+    notes TEXT,
+    duration_minutes INTEGER DEFAULT 30,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Create indexes
+CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
+CREATE INDEX IF NOT EXISTS idx_users_role ON users(role);
+CREATE INDEX IF NOT EXISTS idx_patients_phone ON patients(phone);
+CREATE INDEX IF NOT EXISTS idx_appointments_patient_id ON appointments(patient_id);
+CREATE INDEX IF NOT EXISTS idx_appointments_doctor_id ON appointments(doctor_id);
+CREATE INDEX IF NOT EXISTS idx_appointments_date ON appointments(appointment_date);
+
+-- Insert admin user (password: admin123)
+INSERT INTO users (name, email, password, role, specialization, phone) 
+VALUES ('Admin User', 'admin@hms.et', '$2b$10$YourHashedPasswordHere', 'admin', 'Administration', '+251911111111')
+ON CONFLICT (email) DO NOTHING;
+
+-- Insert sample doctor
+INSERT INTO users (name, email, password, role, specialization, phone) 
+VALUES ('Dr. Alemayehu Teklu', 'alex@hms.et', '$2b$10$YourHashedPasswordHere', 'doctor', 'Cardiology', '+251922222222')
+ON CONFLICT (email) DO NOTHING;
+
+-- Insert sample patient
+INSERT INTO patients (full_name, gender, date_of_birth, phone, email, address, emergency_contact, blood_type, allergies) 
+VALUES ('Mekdes Abebe', 'female', '1990-05-15', '+251911234567', 'mekdes@email.com', 'Addis Ababa, Bole', '+251912345678', 'O+', 'Penicillin')
+ON CONFLICT (phone) DO NOTHING;
+`;
+
+/**
+ * Simple setup without external dependencies
+ */
+async function simpleSetup() {
+  logger.info('🚀 Starting Simple Database Setup');
+  logger.info('This script will create a basic HMS database structure.');
+  
+  const client = new Client({
+    host: DB_HOST,
+    port: DB_PORT,
+    user: DB_USER,
+    password: DB_PASSWORD,
+    database: 'postgres' // Connect to default database first
+  });
   
   try {
-    logger.info(`Checking if database '${DB_NAME}' exists...`);
+    // Connect to PostgreSQL
+    await client.connect();
+    logger.info('✅ Connected to PostgreSQL');
     
     // Check if database exists
-    const { stdout } = await execAsync(checkDbCommand);
-    const dbExists = stdout.trim() === '1';
+    const dbCheck = await client.query(
+      'SELECT 1 FROM pg_database WHERE datname = $1',
+      [DB_NAME]
+    );
     
-    if (!dbExists) {
-      logger.info(`Database '${DB_NAME}' does not exist. Creating...`);
-      
-      // Create the database
-      const createDbCommand = `PGPASSWORD="${DB_PASSWORD}" createdb -h ${DB_HOST} -p ${DB_PORT} -U ${DB_USER} ${DB_NAME}`;
-      await execAsync(createDbCommand);
-      
-      logger.info(`Database '${DB_NAME}' created successfully`);
+    if (dbCheck.rows.length === 0) {
+      // Create database
+      logger.info(`Creating database: ${DB_NAME}`);
+      await client.query(`CREATE DATABASE ${DB_NAME}`);
+      logger.info(`✅ Database created: ${DB_NAME}`);
     } else {
-      logger.info(`Database '${DB_NAME}' already exists`);
+      logger.info(`✅ Database already exists: ${DB_NAME}`);
     }
     
-    return true;
-  } catch (error) {
-    logger.error('Error checking/creating database:', error.message);
-    throw error;
-  }
-}
-
-/**
- * Run migration files in sequence
- * Migrations are run in alphabetical order (001_, 002_, etc.)
- */
-async function runMigrations() {
-  const migrationsDir = path.join(__dirname, '..', 'database', 'migrations');
-  
-  try {
-    // Read all migration files
-    const files = await fs.readdir(migrationsDir);
+    // Close connection to postgres database
+    await client.end();
     
-    // Filter SQL files and sort them
-    const sqlFiles = files
-      .filter(file => file.endsWith('.sql'))
-      .sort(); // Natural sort will order 001_, 002_, etc.
+    // Connect to the new database
+    const dbClient = new Client({
+      host: DB_HOST,
+      port: DB_PORT,
+      user: DB_USER,
+      password: DB_PASSWORD,
+      database: DB_NAME
+    });
     
-    logger.info(`Found ${sqlFiles.length} migration files`);
+    await dbClient.connect();
+    logger.info(`✅ Connected to database: ${DB_NAME}`);
     
-    // Run each migration in order
-    for (const file of sqlFiles) {
-      const filePath = path.join(migrationsDir, file);
-      logger.info(`Running migration: ${file}`);
-      
-      // Read the SQL file
-      const sql = await fs.readFile(filePath, 'utf8');
-      
-      // Execute the SQL
-      const runMigrationCommand = `PGPASSWORD="${DB_PASSWORD}" psql -h ${DB_HOST} -p ${DB_PORT} -U ${DB_USER} -d ${DB_NAME} -f "${filePath}"`;
-      await execAsync(runMigrationCommand);
-      
-      logger.info(`Migration ${file} completed successfully`);
-    }
+    // Create tables
+    logger.info('Creating tables...');
+    await dbClient.query(simpleSchema);
+    logger.info('✅ Tables created successfully');
     
-    return sqlFiles.length;
-  } catch (error) {
-    logger.error('Error running migrations:', error.message);
-    throw error;
-  }
-}
-
-/**
- * Run seed files to populate initial data
- * Seeds are run after migrations
- */
-async function runSeeds() {
-  const seedsDir = path.join(__dirname, '..', 'database', 'seeds');
-  
-  try {
-    // Check if seeds directory exists
-    try {
-      await fs.access(seedsDir);
-    } catch {
-      logger.info('No seeds directory found, skipping seeds');
-      return 0;
-    }
+    // Test the setup
+    const usersCount = await dbClient.query('SELECT COUNT(*) FROM users');
+    const patientsCount = await dbClient.query('SELECT COUNT(*) FROM patients');
     
-    // Read all seed files
-    const files = await fs.readdir(seedsDir);
-    const sqlFiles = files.filter(file => file.endsWith('.sql'));
+    logger.info('\n📊 Setup Summary:');
+    logger.info(`Users created: ${usersCount.rows[0].count}`);
+    logger.info(`Patients created: ${patientsCount.rows[0].count}`);
     
-    logger.info(`Found ${sqlFiles.length} seed files`);
+    await dbClient.end();
     
-    // Run each seed file
-    for (const file of sqlFiles) {
-      const filePath = path.join(seedsDir, file);
-      logger.info(`Running seed: ${file}`);
-      
-      // Execute the seed SQL
-      const runSeedCommand = `PGPASSWORD="${DB_PASSWORD}" psql -h ${DB_HOST} -p ${DB_PORT} -U ${DB_USER} -d ${DB_NAME} -f "${filePath}"`;
-      await execAsync(runSeedCommand);
-      
-      logger.info(`Seed ${file} completed successfully`);
-    }
-    
-    return sqlFiles.length;
-  } catch (error) {
-    logger.error('Error running seeds:', error.message);
-    throw error;
-  }
-}
-
-/**
- * Main function that orchestrates the database setup
- */
-async function setupDatabase() {
-  logger.info('Starting HMS database setup...');
-  logger.info(`Environment: ${NODE_ENV}`);
-  
-  try {
-    // Step 1: Create database if needed
-    await createDatabaseIfNotExists();
-    
-    // Step 2: Run migrations
-    const migrationCount = await runMigrations();
-    
-    // Step 3: Run seeds
-    const seedCount = await runSeeds();
-    
-    logger.info('=========================================');
-    logger.info('Database setup completed successfully!');
-    logger.info(`Migrations run: ${migrationCount}`);
-    logger.info(`Seed files run: ${seedCount}`);
-    logger.info('=========================================');
-    
-    // Test the connection
-    logger.info('Testing database connection...');
-    const { testConnection } = require('../database/connection');
-    const connectionOk = await testConnection();
-    
-    if (connectionOk) {
-      logger.info('✅ Database setup and connection test successful!');
-    } else {
-      logger.error('❌ Database connection test failed');
-      process.exit(1);
-    }
+    logger.info('\n' + '='.repeat(50));
+    logger.info('✅ SIMPLE SETUP COMPLETED!');
+    logger.info('='.repeat(50));
+    logger.info('\nYou can now:');
+    logger.info('1. Login with: admin@hms.et / admin123');
+    logger.info('2. Run the server: npm start');
+    logger.info('3. Access: http://localhost:3000');
+    logger.info('='.repeat(50));
     
   } catch (error) {
-    logger.error('Database setup failed:', error.message);
+    logger.error('❌ Setup failed:', error.message);
+    
+    logger.info('\nTroubleshooting:');
+    logger.info('1. Is PostgreSQL installed and running?');
+    logger.info('2. Check your connection details:');
+    logger.info(`   Host: ${DB_HOST}`);
+    logger.info(`   Port: ${DB_PORT}`);
+    logger.info(`   User: ${DB_USER}`);
+    logger.info('3. Try these commands:');
+    logger.info('   Linux/Mac: sudo systemctl status postgresql');
+    logger.info('   Windows: Check PostgreSQL service in Services');
+    logger.info('4. Default credentials: postgres / postgres');
+    
     process.exit(1);
   }
 }
 
-// Run the setup if this script is executed directly
+// Run if called directly
 if (require.main === module) {
-  setupDatabase();
+  simpleSetup();
 }
 
-// Export for programmatic usage
-module.exports = {
-  setupDatabase,
-  createDatabaseIfNotExists,
-  runMigrations,
-  runSeeds
-};
+module.exports = { simpleSetup };
